@@ -1,0 +1,54 @@
+platform: facebook
+tasks:
+  post_group:
+    steps:
+      - type: goto
+        url: "https://facebook.com/groups/{{target.username}}"
+      - type: sleep
+        seconds: 2.0
+      - type: click
+        selector: "//span[contains(text(), \"Write something\") or contains(text(), \"What's on your mind\")]"
+      - type: wait_selector
+        selector: "//div[@role='dialog']//div[@contenteditable='true']"
+      - type: fill
+        selector: "//div[@role='dialog']//div[@contenteditable='true']"
+        value: "{{content}}"
+      - type: sleep
+        seconds: 1.2
+      - type: click
+        selector: "//div[@role='dialog']//div[@aria-label='Post' or @aria-label='Share']"
+      - type: sleep
+        seconds: 4.0
+  join_group:
+    steps:
+      - type: goto
+        url: "https://facebook.com/groups/{{target.username}}"
+      - type: sleep
+        seconds: 2.5
+
+      # If already joined → abort
+      - type: abort_if_present
+        selector: "//div[@role='button' and (@aria-label='Joined' or .//span[normalize-space()='Joined'])]"
+
+      # If request already pending (Cancel Request or Requested) → abort
+      - type: abort_if_present
+        selector: "//div[@role='button'][.//span[contains(text(),'Cancel Request') or contains(text(),'Requested')]]"
+
+      # Otherwise, proceed to join
+      - type: click
+        selector: "//div[@role='button' and @aria-label='Join Group']"
+      - type: sleep
+        seconds: 2.0
+
+      # Handle membership questions if they appear
+      - type: wait_selector_optional
+        selector: "//textarea[@placeholder='Write an answer...' or contains(@aria-label,'PLEASE NOTE')]"
+        timeout: 8000
+      - type: fill
+        selector: "//textarea[@placeholder='Write an answer...' or contains(@aria-label,'PLEASE NOTE')]"
+        value: "{{content}}"
+      - type: click_if_present
+        selector: "//div[@role='dialog']//div[@role='button'][.//span[contains(text(),'Submit') or contains(text(),'Send') or contains(text(),'Continue')]]"
+
+      - type: sleep
+        seconds: 2.0

@@ -1,0 +1,18 @@
+platform: instagram
+tasks:
+  post_profile:
+    steps:
+      - type: goto
+        url: "https://www.instagram.com"
+      - type: sleep
+        seconds: 2.0
+      # Note: Instagram web posting often needs mobile emulation or APIs.
+      - type: wait_selector
+        selector: "textarea"
+      - type: fill
+        selector: "textarea"
+        value: "{{content}}"
+      - type: click
+        selector: "//button[contains(text(),'Share') or contains(text(),'Post')]"
+      - type: sleep
+        seconds: 4.0
