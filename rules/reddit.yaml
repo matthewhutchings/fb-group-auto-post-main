@@ -1,5 +1,16 @@
 platform: reddit
 tasks:
+  join_subreddit:
+    steps:
+      - type: goto
+        url: "https://www.reddit.com/r/{{target.username}}"
+      - type: wait_selector
+        selector: "button[data-click-id='join']"
+      - type: click
+        selector: "button[data-click-id='join']"
+      - type: sleep
+        seconds: 2.0
+        randomize: true
   post_subreddit:
     steps:
       - type: goto
