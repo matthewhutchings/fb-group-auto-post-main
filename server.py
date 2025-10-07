@@ -13,6 +13,7 @@ from engine.runner import \
     RulesRunner  # <-- runner that returns status/steps/logs/video
 # local imports
 from platforms.loader import load_rules
+import configs
 
 # ------------ Config ------------
 API_KEY = os.environ.get("POSTER_API_KEY")           # simple header auth
@@ -58,6 +59,7 @@ class RunRequest(BaseModel):
     plan: List[PlanItem] = Field(..., description="List of tasks to execute")
     headless: bool = False
     recordings_dir: Optional[str] = Field(default="recordings", description="Where raw .webm are recorded")
+    generate_cookies: bool = Field(default=False, description="Whether to generate new cookies instead of using existing ones")
 
 class RunResponse(BaseModel):
     started_at: str
@@ -112,6 +114,7 @@ def run_tasks(req: RunRequest):
         public_base_url="/files",
         use_chrome_channel=True,
         copy_to_desktop=False,  # API mode: keep videos under /files
+        generate_cookies=req.generate_cookies,
     )
 
     started = datetime.utcnow()

@@ -1,5 +1,6 @@
 # engine/runner.py
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .actions import ACTION_MAP, AbortTask  # ensure AbortTask exists
+import configs
 
 
 def nowstamp() -> str:
@@ -32,6 +34,7 @@ class RulesRunner:
         public_base_url: str = "/files",   # where StaticFiles is mounted
         use_chrome_channel: bool = True,
         copy_to_desktop: bool = False,     # API mode usually doesn't move to Desktop
+        generate_cookies: bool = False,    # whether to generate new cookies
     ):
         self.rules_by_platform = rules_by_platform
         self.headless = headless
@@ -45,6 +48,7 @@ class RulesRunner:
         self.public_base_url = public_base_url.rstrip("/")
         self.use_chrome_channel = use_chrome_channel
         self.copy_to_desktop = copy_to_desktop
+        self.generate_cookies = generate_cookies
         self.desktop = Path.home() / "Desktop"
 
     # ----------------- helpers -----------------
@@ -70,6 +74,50 @@ class RulesRunner:
                 context.add_cookies(cookies)
             except Exception as e:
                 self._log(f"[cookies] Failed to add {platform} cookies: {e}")
+
+    def _generate_cookie(self, page: Page, platform: str):
+        """Generate and save cookies for a platform after manual login"""
+        if platform not in configs.SOCIAL_MAPS:
+            self._log(f"[cookies] No login URL configured for platform '{platform}'")
+            return
+        
+        login_url = configs.SOCIAL_MAPS[platform]['login_url']
+        filename = configs.SOCIAL_MAPS[platform].get('filename', f'{platform}.json')
+        
+        self._log(f"[cookies] Navigating to {login_url} for {platform} login")
+        page.goto(login_url)
+        
+        # In headless mode, we can't wait for user input, so we'll just wait a bit
+        # and assume login happened automatically via existing session or other means
+        if self.headless:
+            self._log(f"[cookies] Headless mode: waiting 10 seconds for auto-login...")
+            page.wait_for_timeout(10000)
+        else:
+            self._log(f"[cookies] Please log in manually, then press Enter in the terminal...")
+            # Note: In API mode, we can't easily wait for terminal input
+            # So we'll wait for a navigation or specific element that indicates login success
+            try:
+                # Wait for navigation away from login page or presence of logged-in indicators
+                page.wait_for_function(
+                    "() => !window.location.href.includes('/login')",
+                    timeout=300000  # 5 minutes
+                )
+            except Exception as e:
+                self._log(f"[cookies] Login timeout or error: {e}")
+                return
+        
+        # Save cookies
+        sessions_dir = Path.cwd() / "sessions"
+        sessions_dir.mkdir(exist_ok=True)
+        cookie_file = sessions_dir / filename
+        
+        try:
+            cookies = page.context.cookies()
+            with open(cookie_file, 'w', encoding='utf-8') as f:
+                json.dump(cookies, f, indent=2)
+            self._log(f"[cookies] Saved {len(cookies)} cookies to {cookie_file}")
+        except Exception as e:
+            self._log(f"[cookies] Failed to save cookies: {e}")
 
     def _publish_videos(self, platform: str, task: str, target_name: str) -> Dict[str, Any]:
         """
@@ -182,16 +230,23 @@ class RulesRunner:
                 message = "ok"
 
                 try:
-                    self._load_cookies_if_any(context, platform)
-                    self._execute_steps(
-                        page,
-                        task_def["steps"],
-                        steps_executed=steps_executed,
-                        log=tlog,
-                        target=target,
-                        content=content,
-                        platform=platform,
-                    )
+                    # If generate_cookies is True, generate cookies instead of loading them
+                    if self.generate_cookies:
+                        self._generate_cookie(page, platform)
+                        # After generating cookies, we can optionally proceed with the task
+                        # or just return after cookie generation
+                        tlog(f"[runner] Cookie generation completed for {platform}")
+                    else:
+                        self._load_cookies_if_any(context, platform)
+                        self._execute_steps(
+                            page,
+                            task_def["steps"],
+                            steps_executed=steps_executed,
+                            log=tlog,
+                            target=target,
+                            content=content,
+                            platform=platform,
+                        )
                 except AbortTask as e:
                     status = "aborted"
                     message = str(e) or "aborted by condition"

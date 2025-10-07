@@ -5,7 +5,7 @@ import typing
 SOCIAL_MAPS = {
     'facebook': {
         'login_url': 'https://facebook.com/login',
-        'filename': 'facebook-cookie.json'
+        'filename': 'facebook.json'
     }
 }
 
