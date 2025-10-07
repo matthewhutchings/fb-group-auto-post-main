@@ -1,5 +1,7 @@
 # server.py
 import os
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +23,9 @@ ALLOW_ORIGINS = os.environ.get("CORS_ALLOW_ORIGINS", "*")
 
 PUBLIC_DIR = Path("/workspace/recordings_public")               # where videos are exposed
 PUBLIC_DIR.mkdir(exist_ok=True)
+
+# Cookie generation session tracking
+cookie_sessions: Dict[str, Dict[str, Any]] = {}
 
 app = FastAPI(title="Multi Poster API", version="1.2.0")
 
@@ -67,12 +72,68 @@ class RunResponse(BaseModel):
     tasks: int
     details: List[Dict[str, Any]]  # each has: platform, task, target, status, message, steps[], logs[], video_url, video_local
 
+class CookieGenerationRequest(BaseModel):
+    platform: Str50 = Field(..., description="Platform to generate cookies for (e.g., 'facebook')")
+    
+class CookieGenerationResponse(BaseModel):
+    session_id: str
+    platform: str
+    status: str  # "started", "completed", "failed"
+    message: str
+    started_at: str
+    
+class CookieStatusResponse(BaseModel):
+    session_id: str
+    platform: str
+    status: str  # "started", "completed", "failed", "not_found"
+    message: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
 # ------------ Utilities ------------
 def _load_rules_or_422():
     rules = load_rules()  # dynamic load each call
     if not rules:
         raise HTTPException(status_code=422, detail="No platform rules found in ./rules/*.yaml")
     return rules
+
+def _background_cookie_generation(session_id: str, platform: str):
+    """Background function to handle cookie generation"""
+    try:
+        cookie_sessions[session_id]["status"] = "in_progress"
+        
+        # Create a minimal runner just for cookie generation
+        rules = load_rules()
+        runner = RulesRunner(
+            rules_by_platform=rules,
+            headless=False,  # Must be False for manual login
+            base_video_dir=Path("recordings"),
+            public_dir=PUBLIC_DIR,
+            public_base_url="/files",
+            use_chrome_channel=True,
+            copy_to_desktop=False,
+            generate_cookies=True,
+        )
+        
+        # Create a dummy plan item just to trigger the cookie generation
+        dummy_plan = [{
+            "platform": platform,
+            "task": "post_group",  # dummy task
+            "target": {"name": "dummy", "username": "dummy"},
+            "content": ""
+        }]
+        
+        # This will generate cookies and return
+        runner.run_plan(dummy_plan)
+        
+        cookie_sessions[session_id]["status"] = "completed"
+        cookie_sessions[session_id]["message"] = f"Cookies generated successfully for {platform}"
+        cookie_sessions[session_id]["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        
+    except Exception as e:
+        cookie_sessions[session_id]["status"] = "failed"
+        cookie_sessions[session_id]["message"] = f"Cookie generation failed: {str(e)}"
+        cookie_sessions[session_id]["completed_at"] = datetime.utcnow().isoformat() + "Z"
 
 # ------------ Routes ------------
 @app.get("/health")
@@ -140,4 +201,61 @@ def run_tasks(req: RunRequest):
         finished_at=finished.isoformat() + "Z",
         tasks=len(details),
         details=details,
+    )
+
+@app.post("/generate-cookies", response_model=CookieGenerationResponse, dependencies=[Depends(require_api_key)])
+def generate_cookies(req: CookieGenerationRequest):
+    """Start cookie generation process in background"""
+    rules = _load_rules_or_422()
+    
+    if req.platform not in rules:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{req.platform}'")
+    
+    session_id = str(uuid.uuid4())
+    started_at = datetime.utcnow().isoformat() + "Z"
+    
+    # Initialize session tracking
+    cookie_sessions[session_id] = {
+        "platform": req.platform,
+        "status": "started",
+        "message": "Cookie generation started. Browser will open for manual login.",
+        "started_at": started_at,
+        "completed_at": None
+    }
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=_background_cookie_generation,
+        args=(session_id, req.platform),
+        daemon=True
+    )
+    thread.start()
+    
+    return CookieGenerationResponse(
+        session_id=session_id,
+        platform=req.platform,
+        status="started",
+        message="Cookie generation started. Browser will open for manual login. Use /cookie-status/{session_id} to check progress.",
+        started_at=started_at
+    )
+
+@app.get("/cookie-status/{session_id}", response_model=CookieStatusResponse, dependencies=[Depends(require_api_key)])
+def get_cookie_status(session_id: str):
+    """Check the status of a cookie generation session"""
+    if session_id not in cookie_sessions:
+        return CookieStatusResponse(
+            session_id=session_id,
+            platform="unknown",
+            status="not_found",
+            message="Session not found"
+        )
+    
+    session = cookie_sessions[session_id]
+    return CookieStatusResponse(
+        session_id=session_id,
+        platform=session["platform"],
+        status=session["status"],
+        message=session["message"],
+        started_at=session["started_at"],
+        completed_at=session.get("completed_at")
     )

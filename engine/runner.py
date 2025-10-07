@@ -87,24 +87,35 @@ class RulesRunner:
         self._log(f"[cookies] Navigating to {login_url} for {platform} login")
         page.goto(login_url)
         
-        # In headless mode, we can't wait for user input, so we'll just wait a bit
-        # and assume login happened automatically via existing session or other means
-        if self.headless:
-            self._log(f"[cookies] Headless mode: waiting 10 seconds for auto-login...")
-            page.wait_for_timeout(10000)
-        else:
-            self._log(f"[cookies] Please log in manually, then press Enter in the terminal...")
-            # Note: In API mode, we can't easily wait for terminal input
-            # So we'll wait for a navigation or specific element that indicates login success
-            try:
-                # Wait for navigation away from login page or presence of logged-in indicators
-                page.wait_for_function(
-                    "() => !window.location.href.includes('/login')",
-                    timeout=300000  # 5 minutes
-                )
-            except Exception as e:
-                self._log(f"[cookies] Login timeout or error: {e}")
-                return
+        self._log(f"[cookies] Browser opened for {platform} login. Waiting for user to complete login...")
+        
+        # Wait for navigation away from login page or presence of logged-in indicators
+        try:
+            # Wait for navigation away from login page or specific success indicators
+            page.wait_for_function(
+                """() => {
+                    // Check if we're no longer on login page
+                    if (!window.location.href.includes('/login')) {
+                        return true;
+                    }
+                    // Check for Facebook-specific logged-in indicators
+                    if (document.querySelector('[data-testid="royal_login_form"]') === null) {
+                        return true;
+                    }
+                    // Check for presence of user menu or other logged-in elements
+                    if (document.querySelector('[aria-label="Account"]') || 
+                        document.querySelector('[data-testid="blue_bar"]') ||
+                        document.querySelector('[role="navigation"]')) {
+                        return true;
+                    }
+                    return false;
+                }""",
+                timeout=600000  # 10 minutes timeout
+            )
+            self._log(f"[cookies] Login detected for {platform}")
+        except Exception as e:
+            self._log(f"[cookies] Login timeout or error: {e}")
+            raise
         
         # Save cookies
         sessions_dir = Path.cwd() / "sessions"
@@ -118,6 +129,7 @@ class RulesRunner:
             self._log(f"[cookies] Saved {len(cookies)} cookies to {cookie_file}")
         except Exception as e:
             self._log(f"[cookies] Failed to save cookies: {e}")
+            raise
 
     def _publish_videos(self, platform: str, task: str, target_name: str) -> Dict[str, Any]:
         """
