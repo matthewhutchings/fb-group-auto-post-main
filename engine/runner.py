@@ -35,10 +35,11 @@ class RulesRunner:
     ):
         self.rules_by_platform = rules_by_platform
         self.headless = headless
-        self.base_video_dir = Path(base_video_dir or (Path.cwd() / "recordings"))
+        self.base_video_dir = Path("/workspace/recordings")
         self.base_video_dir.mkdir(parents=True, exist_ok=True)
 
-        self.public_dir = Path(public_dir or (Path.cwd() / "recordings_public"))
+        self.public_dir = Path("/workspace/recordings_public")
+
         self.public_dir.mkdir(parents=True, exist_ok=True)
 
         self.public_base_url = public_base_url.rstrip("/")
