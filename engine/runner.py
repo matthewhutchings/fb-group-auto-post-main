@@ -2,10 +2,13 @@
 import json
 import os
 import shutil
+import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .actions import ACTION_MAP, AbortTask  # ensure AbortTask exists
@@ -14,6 +17,42 @@ import configs
 
 def nowstamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def get_cdp_ws_url(port: int = 9222) -> str:
+    """Get Chrome DevTools Protocol WebSocket URL"""
+    try:
+        response = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=3)
+        response.raise_for_status()
+        info = response.json()
+        return info["webSocketDebuggerUrl"]
+    except Exception as e:
+        raise Exception(f"Failed to get CDP WebSocket URL: {e}")
+
+
+def is_chrome_running_with_debug(port: int = 9222) -> bool:
+    """Check if Chrome is running with remote debugging enabled"""
+    try:
+        response = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=1)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def start_chrome_with_debug(chrome_path: str, port: int = 9222, args: List[str] = None) -> subprocess.Popen:
+    """Start Chrome with remote debugging enabled"""
+    if args is None:
+        args = []
+    
+    chrome_args = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        "--remote-allow-origins=*",
+        "--no-first-run",
+        "--disable-blink-features=AutomationControlled"
+    ] + args
+    
+    return subprocess.Popen(chrome_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 class RulesRunner:
@@ -51,7 +90,85 @@ class RulesRunner:
         self.generate_cookies = generate_cookies
         self.desktop = Path.home() / "Desktop"
 
-    # ----------------- helpers -----------------
+    def _connect_or_launch_browser(self, p) -> Browser:
+        """Connect to existing Chrome via CDP or launch new browser"""
+        
+        if configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+            # Try to connect to existing Chrome with remote debugging
+            cdp_port = configs.BROWSER_CONFIG.get('cdp_port', 9222)
+            
+            if is_chrome_running_with_debug(cdp_port):
+                try:
+                    self._log(f"[browser] Connecting to existing Chrome on port {cdp_port}")
+                    ws_url = get_cdp_ws_url(cdp_port)
+                    browser = p.chromium.connect_over_cdp(ws_url)
+                    self._log(f"[browser] ✅ Connected to existing Chrome via CDP")
+                    return browser
+                except Exception as e:
+                    self._log(f"[browser] ⚠️ Failed to connect to existing Chrome: {e}")
+            else:
+                self._log(f"[browser] No Chrome found with remote debugging on port {cdp_port}")
+                
+                # Try to start Chrome with remote debugging
+                if configs.BROWSER_CONFIG.get('use_local_chrome', False):
+                    try:
+                        self._log(f"[browser] Starting Chrome with remote debugging on port {cdp_port}")
+                        chrome_path = configs.BROWSER_CONFIG['chrome_path']
+                        chrome_args = configs.BROWSER_CONFIG.get('chrome_args', [])
+                        
+                        # Filter out conflicting args and add our required ones
+                        filtered_args = [arg for arg in chrome_args 
+                                       if not arg.startswith('--remote-debugging')]
+                        
+                        start_chrome_with_debug(chrome_path, cdp_port, filtered_args)
+                        
+                        # Wait for Chrome to start
+                        for i in range(10):  # Wait up to 10 seconds
+                            time.sleep(1)
+                            if is_chrome_running_with_debug(cdp_port):
+                                self._log(f"[browser] Chrome started successfully")
+                                break
+                        else:
+                            raise Exception("Chrome failed to start with remote debugging")
+                        
+                        # Connect to the newly started Chrome
+                        ws_url = get_cdp_ws_url(cdp_port)
+                        browser = p.chromium.connect_over_cdp(ws_url)
+                        self._log(f"[browser] ✅ Connected to newly started Chrome via CDP")
+                        return browser
+                        
+                    except Exception as e:
+                        self._log(f"[browser] ⚠️ Failed to start Chrome with remote debugging: {e}")
+        
+        # Fallback to launching browser directly
+        return self._launch_browser_directly(p)
+    
+    def _launch_browser_directly(self, p) -> Browser:
+        """Launch browser directly (original method)"""
+        try:
+            if self.use_chrome_channel and configs.BROWSER_CONFIG.get('use_local_chrome', False):
+                self._log(f"[browser] Launching Chrome directly")
+                browser = p.chromium.launch(
+                    headless=self.headless, 
+                    channel="chrome",
+                    executable_path=configs.BROWSER_CONFIG['chrome_path'],
+                    args=configs.BROWSER_CONFIG['chrome_args']
+                )
+            elif self.use_chrome_channel:
+                # Try Chrome channel without explicit path
+                browser = p.chromium.launch(
+                    headless=self.headless, 
+                    channel="chrome",
+                    args=["--start-maximized"]
+                )
+            else:
+                raise Exception("Chrome channel disabled")
+        except Exception as e:
+            self._log(f"[browser] ⚠️ Failed to launch Chrome: {e}")
+            self._log("[browser] Falling back to Chromium...")
+            browser = p.chromium.launch(headless=self.headless, args=["--start-maximized"])
+        
+        return browser
 
     def _task_dir(self, platform: str, task: str) -> Path:
         d = self.base_video_dir / f"{platform}_{task}_{nowstamp()}"
@@ -60,6 +177,14 @@ class RulesRunner:
 
     def _new_context(self, browser: Browser, platform: str, task: str) -> BrowserContext:
         task_dir = self._task_dir(platform, task)
+        
+        # For CDP connections, try to use existing context or create new one
+        if configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+            # If browser has existing contexts, create a new page in the first context
+            if hasattr(browser, 'contexts') and browser.contexts:
+                return browser.contexts[0]
+        
+        # Create new context with video recording
         return browser.new_context(
             no_viewport=True,
             record_video_dir=str(task_dir),
@@ -249,28 +374,7 @@ class RulesRunner:
         results: List[Dict[str, Any]] = []
 
         with sync_playwright() as p:
-            # Use local Chrome if configured and available
-            try:
-                if self.use_chrome_channel and configs.BROWSER_CONFIG['use_local_chrome']:
-                    browser = p.chromium.launch(
-                        headless=self.headless, 
-                        channel="chrome",
-                        executable_path=configs.BROWSER_CONFIG['chrome_path'],
-                        args=configs.BROWSER_CONFIG['chrome_args']
-                    )
-                elif self.use_chrome_channel:
-                    # Try Chrome channel without explicit path
-                    browser = p.chromium.launch(
-                        headless=self.headless, 
-                        channel="chrome",
-                        args=["--start-maximized"]
-                    )
-                else:
-                    raise Exception("Chrome channel disabled")
-            except Exception as e:
-                print(f"[WARNING] Failed to launch Chrome: {e}")
-                print("[WARNING] Falling back to Chromium...")
-                browser = p.chromium.launch(headless=self.headless, args=["--start-maximized"])
+            browser = self._connect_or_launch_browser(p)
 
             for item in plan:
                 platform = item["platform"]
@@ -344,7 +448,17 @@ class RulesRunner:
                     tlog(f"[runner] Task error: {message}")
                 finally:
                     # close to flush video; then publish
-                    context.close()
+                    if configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+                        # For CDP connections, only close the context, not the browser
+                        try:
+                            if context != browser.contexts[0]:  # Only close if it's not the main context
+                                context.close()
+                        except:
+                            pass
+                    else:
+                        # For direct launches, close the context normally
+                        context.close()
+                    
                     vid = self._publish_videos(platform, task, target_name)
 
                     results.append({
@@ -359,7 +473,9 @@ class RulesRunner:
                         "video_url": vid.get("video_url"),
                     })
 
-            browser.close()
+            # Only close browser if not using CDP connection
+            if not configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+                browser.close()
 
         return results
 

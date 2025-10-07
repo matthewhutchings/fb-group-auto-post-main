@@ -1,6 +1,9 @@
 # server.py
 import os
+import requests
+import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -92,7 +95,118 @@ class CookieStatusResponse(BaseModel):
     completed_at: Optional[str] = None
 
 # ------------ Utilities ------------
-def _load_rules_or_422():
+def _get_cdp_ws_url(port: int = 9222) -> str:
+    """Get Chrome DevTools Protocol WebSocket URL"""
+    try:
+        response = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=3)
+        response.raise_for_status()
+        info = response.json()
+        return info["webSocketDebuggerUrl"]
+    except Exception as e:
+        raise Exception(f"Failed to get CDP WebSocket URL: {e}")
+
+
+def _is_chrome_running_with_debug(port: int = 9222) -> bool:
+    """Check if Chrome is running with remote debugging enabled"""
+    try:
+        response = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=1)
+        return response.status_code == 200
+    except:
+        return False
+
+
+def _start_chrome_with_debug(chrome_path: str, port: int = 9222, args: List[str] = None) -> subprocess.Popen:
+    """Start Chrome with remote debugging enabled"""
+    if args is None:
+        args = []
+    
+    chrome_args = [
+        chrome_path,
+        f"--remote-debugging-port={port}",
+        "--remote-allow-origins=*",
+        "--no-first-run",
+        "--disable-blink-features=AutomationControlled"
+    ] + args
+    
+    return subprocess.Popen(chrome_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _connect_or_launch_browser(p, headless=False):
+    """Connect to existing Chrome via CDP or launch new browser"""
+    
+    if configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+        # Try to connect to existing Chrome with remote debugging
+        cdp_port = configs.BROWSER_CONFIG.get('cdp_port', 9222)
+        
+        if _is_chrome_running_with_debug(cdp_port):
+            try:
+                print(f"[Cookie Gen] Connecting to existing Chrome on port {cdp_port}")
+                ws_url = _get_cdp_ws_url(cdp_port)
+                browser = p.chromium.connect_over_cdp(ws_url)
+                print(f"[Cookie Gen] ✅ Connected to existing Chrome via CDP")
+                return browser
+            except Exception as e:
+                print(f"[Cookie Gen] ⚠️ Failed to connect to existing Chrome: {e}")
+        else:
+            print(f"[Cookie Gen] No Chrome found with remote debugging on port {cdp_port}")
+            
+            # Try to start Chrome with remote debugging
+            if configs.BROWSER_CONFIG.get('use_local_chrome', False):
+                try:
+                    print(f"[Cookie Gen] Starting Chrome with remote debugging on port {cdp_port}")
+                    chrome_path = configs.BROWSER_CONFIG['chrome_path']
+                    chrome_args = configs.BROWSER_CONFIG.get('chrome_args', [])
+                    
+                    # Filter out conflicting args and add our required ones
+                    filtered_args = [arg for arg in chrome_args 
+                                   if not arg.startswith('--remote-debugging')]
+                    
+                    _start_chrome_with_debug(chrome_path, cdp_port, filtered_args)
+                    
+                    # Wait for Chrome to start
+                    for i in range(10):  # Wait up to 10 seconds
+                        time.sleep(1)
+                        if _is_chrome_running_with_debug(cdp_port):
+                            print(f"[Cookie Gen] Chrome started successfully")
+                            break
+                    else:
+                        raise Exception("Chrome failed to start with remote debugging")
+                    
+                    # Connect to the newly started Chrome
+                    ws_url = _get_cdp_ws_url(cdp_port)
+                    browser = p.chromium.connect_over_cdp(ws_url)
+                    print(f"[Cookie Gen] ✅ Connected to newly started Chrome via CDP")
+                    return browser
+                    
+                except Exception as e:
+                    print(f"[Cookie Gen] ⚠️ Failed to start Chrome with remote debugging: {e}")
+    
+    # Fallback to launching browser directly
+    try:
+        if configs.BROWSER_CONFIG.get('use_local_chrome', False):
+            print(f"[Cookie Gen] Launching Chrome directly")
+            browser = p.chromium.launch(
+                headless=headless,
+                channel="chrome",
+                executable_path=configs.BROWSER_CONFIG['chrome_path'],
+                args=configs.BROWSER_CONFIG['chrome_args']
+            )
+        else:
+            # Try Chrome channel without explicit path
+            browser = p.chromium.launch(
+                headless=headless,
+                channel="chrome", 
+                args=["--start-maximized"]
+            )
+    except Exception as e:
+        print(f"[Cookie Gen] ⚠️ Failed to launch Chrome: {e}")
+        print("[Cookie Gen] Falling back to Chromium...")
+        browser = p.chromium.launch(
+            headless=headless,
+            args=["--start-maximized"]
+        )
+    
+    return browser
     rules = load_rules()  # dynamic load each call
     if not rules:
         raise HTTPException(status_code=422, detail="No platform rules found in ./rules/*.yaml")
@@ -108,32 +222,15 @@ def _background_cookie_generation(session_id: str, platform: str, manual_confirm
         from playwright.sync_api import sync_playwright
         
         with sync_playwright() as p:
-            try:
-                # Use local Chrome if configured and available
-                if configs.BROWSER_CONFIG['use_local_chrome']:
-                    browser = p.chromium.launch(
-                        headless=False,  # Must be False for manual login
-                        channel="chrome",
-                        executable_path=configs.BROWSER_CONFIG['chrome_path'],
-                        args=configs.BROWSER_CONFIG['chrome_args']
-                    )
-                else:
-                    # Try Chrome channel without explicit path
-                    browser = p.chromium.launch(
-                        headless=False,
-                        channel="chrome", 
-                        args=["--start-maximized"]
-                    )
-            except Exception as e:
-                print(f"[WARNING] Failed to launch Chrome: {e}")
-                print("[WARNING] Falling back to Chromium...")
-                browser = p.chromium.launch(
-                    headless=False,
-                    args=["--start-maximized"]
-                )
+            browser = _connect_or_launch_browser(p, headless=False)
             
-            context = browser.new_context(no_viewport=True)
-            page = context.new_page()
+            # Get existing context or create new one
+            if hasattr(browser, 'contexts') and browser.contexts:
+                context = browser.contexts[0]
+                page = context.new_page()
+            else:
+                context = browser.new_context(no_viewport=True)
+                page = context.new_page()
             
             try:
                 # Generate cookies using the runner's method
@@ -216,8 +313,22 @@ def _background_cookie_generation(session_id: str, platform: str, manual_confirm
                     page.wait_for_timeout(2000)  # Wait 2 seconds
                 except:
                     pass
-                context.close()
-                browser.close()
+                
+                # For CDP connections, only close the context, not the browser
+                if configs.BROWSER_CONFIG.get('use_cdp_connection', False):
+                    try:
+                        context.close()
+                        print("[Cookie Gen] Context closed (browser remains open)")
+                    except:
+                        pass
+                else:
+                    # For direct launches, close the entire browser
+                    try:
+                        context.close()
+                        browser.close()
+                        print("[Cookie Gen] Browser closed")
+                    except:
+                        pass
         
     except Exception as e:
         cookie_sessions[session_id]["status"] = "failed"
