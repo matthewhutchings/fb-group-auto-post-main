@@ -23,7 +23,7 @@ BROWSER_CONFIG = {
     'use_local_chrome': True,  # Set to False to use Chromium
     'use_cdp_connection': True,  # Connect to existing Chrome via CDP
     'cdp_port': 9222,  # Chrome remote debugging port
-    'chrome_path': '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    'chrome_path': '/usr/bin/google-chrome',  # Chrome path in Kasm/Docker environment
     'chrome_args': [
         '--start-maximized',
         '--no-first-run',
@@ -31,7 +31,10 @@ BROWSER_CONFIG = {
         '--disable-web-security',
         '--disable-features=VizDisplayCompositor',
         '--remote-debugging-port=9222',  # Enable remote debugging
-        '--remote-allow-origins=*'  # Allow connections from any origin
+        '--remote-allow-origins=*',  # Allow connections from any origin
+        '--no-sandbox',  # Required for Docker
+        '--disable-dev-shm-usage',  # Required for Docker
+        '--disable-gpu'  # Optional for Docker
     ]
 }
 

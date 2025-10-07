@@ -120,14 +120,33 @@ def _start_chrome_with_debug(chrome_path: str, port: int = 9222, args: List[str]
     if args is None:
         args = []
     
+    # Detect Docker environment
+    is_docker = os.path.exists('/.dockerenv')
+    
     chrome_args = [
         chrome_path,
         f"--remote-debugging-port={port}",
         "--remote-allow-origins=*",
         "--no-first-run",
-        "--disable-blink-features=AutomationControlled"
-    ] + args
+        "--disable-blink-features=AutomationControlled",
+        "--user-data-dir=/tmp/chrome-automation"
+    ]
     
+    # Add Docker-specific arguments if in container
+    if is_docker:
+        chrome_args.extend([
+            "--no-sandbox",
+            "--disable-dev-shm-usage", 
+            "--disable-gpu"
+        ])
+        print("[Cookie Gen] Detected Docker environment, using container-specific arguments")
+    
+    # Add custom arguments (filter out duplicates)
+    for arg in args:
+        if not any(arg.startswith(existing.split('=')[0]) for existing in chrome_args):
+            chrome_args.append(arg)
+    
+    print(f"[Cookie Gen] Starting Chrome with args: {' '.join(chrome_args[1:])}")
     return subprocess.Popen(chrome_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -207,10 +226,15 @@ def _connect_or_launch_browser(p, headless=False):
         )
     
     return browser
+
+
+# ------------ Utilities ------------
+def _load_rules_or_422():
     rules = load_rules()  # dynamic load each call
     if not rules:
         raise HTTPException(status_code=422, detail="No platform rules found in ./rules/*.yaml")
     return rules
+
 
 def _background_cookie_generation(session_id: str, platform: str, manual_confirmation: bool = False):
     """Background function to handle cookie generation"""

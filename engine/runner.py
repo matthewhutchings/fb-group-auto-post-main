@@ -44,13 +44,28 @@ def start_chrome_with_debug(chrome_path: str, port: int = 9222, args: List[str] 
     if args is None:
         args = []
     
+    # Detect Docker environment
+    is_docker = os.path.exists('/.dockerenv')
+    
     chrome_args = [
         chrome_path,
         f"--remote-debugging-port={port}",
         "--remote-allow-origins=*",
         "--no-first-run",
-        "--disable-blink-features=AutomationControlled"
-    ] + args
+        "--disable-blink-features=AutomationControlled",
+        "--user-data-dir=/tmp/chrome-automation"
+    ]
+    
+    # Add Docker-specific arguments if in container
+    if is_docker:
+        chrome_args.extend([
+            "--no-sandbox",
+            "--disable-dev-shm-usage", 
+            "--disable-gpu"
+        ])
+    
+    # Add custom arguments
+    chrome_args.extend(args)
     
     return subprocess.Popen(chrome_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
