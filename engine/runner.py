@@ -235,74 +235,18 @@ class RulesRunner:
         self._log(f"[cookies] Please log in manually in the browser window...")
         self._log(f"[cookies] Waiting for login completion (up to 10 minutes)...")
         
-        # Wait for navigation away from login page or presence of logged-in indicators
+        # Platform-specific login detection
         try:
-            # More strict login detection - wait for actual login, not just page load
-            page.wait_for_function(
-                """() => {
-                    // Only return true if we have clear evidence of being logged in
-                    
-                    // First check: Are we still on the login page?
-                    const isOnLoginPage = window.location.href.includes('/login') || 
-                                         window.location.href.includes('/signin');
-                    
-                    if (isOnLoginPage) {
-                        // If still on login page, check if login form is gone AND we have logged-in elements
-                        const loginForm = document.querySelector('[data-testid="royal_login_form"]') ||
-                                        document.querySelector('form[action*="login"]') ||
-                                        document.querySelector('#loginform');
-                        
-                        // Only proceed if login form is completely gone
-                        if (loginForm) {
-                            console.log('Still on login page with form visible');
-                            return false;
-                        }
-                    }
-                    
-                    // Check for definitive logged-in indicators
-                    const loggedInElements = [
-                        '[aria-label="Account"]',
-                        '[data-testid="blue_bar"]',
-                        '[data-testid="fb-nav-bar"]',
-                        '[data-testid="nav-bar-user-menu"]',
-                        '[role="banner"] [role="navigation"]',
-                        '[data-testid="left_nav_menu_list"]',
-                        'div[data-pagelet="LeftRail"]'
-                    ];
-                    
-                    let foundLoggedInElement = false;
-                    for (const selector of loggedInElements) {
-                        if (document.querySelector(selector)) {
-                            console.log('Found logged-in element:', selector);
-                            foundLoggedInElement = true;
-                            break;
-                        }
-                    }
-                    
-                    // Check if we're on a logged-in page (home, feed, profile)
-                    const loggedInUrls = ['/feed', '/home', '/?', '/profile'];
-                    const isOnLoggedInPage = loggedInUrls.some(url => 
-                        window.location.href.includes(url) || 
-                        window.location.pathname === '/'
-                    );
-                    
-                    // Only return true if we have BOTH a logged-in element AND are not on login page
-                    if (foundLoggedInElement && !isOnLoginPage) {
-                        console.log('✅ Successfully logged in - found UI elements and not on login page');
-                        return true;
-                    }
-                    
-                    // Alternative: if we're clearly on a logged-in page with content
-                    if (isOnLoggedInPage && foundLoggedInElement) {
-                        console.log('✅ Successfully logged in - on logged-in page with UI elements');
-                        return true;
-                    }
-                    
-                    console.log('Still waiting for login completion...');
-                    return false;
-                }""",
-                timeout=600000  # 10 minutes timeout
-            )
+            if platform == 'facebook':
+                self._detect_facebook_login(page)
+            elif platform == 'reddit':
+                self._detect_reddit_login(page)
+            elif platform == 'instagram':
+                self._detect_instagram_login(page)
+            else:
+                # Generic detection for unknown platforms
+                self._detect_generic_login(page, platform)
+            
             self._log(f"[cookies] ✅ Login detected for {platform}")
             
             # Wait a bit more to ensure all cookies are set
@@ -331,6 +275,255 @@ class RulesRunner:
         except Exception as e:
             self._log(f"[cookies] ❌ Failed to save cookies: {e}")
             raise
+
+    def _detect_facebook_login(self, page: Page):
+        """Detect Facebook login completion"""
+        page.wait_for_function(
+            """() => {
+                // Only return true if we have clear evidence of being logged in
+                
+                // First check: Are we still on the login page?
+                const isOnLoginPage = window.location.href.includes('/login') || 
+                                     window.location.href.includes('/signin');
+                
+                if (isOnLoginPage) {
+                    // If still on login page, check if login form is gone AND we have logged-in elements
+                    const loginForm = document.querySelector('[data-testid="royal_login_form"]') ||
+                                    document.querySelector('form[action*="login"]') ||
+                                    document.querySelector('#loginform');
+                    
+                    // Only proceed if login form is completely gone
+                    if (loginForm) {
+                        console.log('Still on login page with form visible');
+                        return false;
+                    }
+                }
+                
+                // Check for definitive logged-in indicators
+                const loggedInElements = [
+                    '[aria-label="Account"]',
+                    '[data-testid="blue_bar"]',
+                    '[data-testid="fb-nav-bar"]',
+                    '[data-testid="nav-bar-user-menu"]',
+                    '[role="banner"] [role="navigation"]',
+                    '[data-testid="left_nav_menu_list"]',
+                    'div[data-pagelet="LeftRail"]'
+                ];
+                
+                let foundLoggedInElement = false;
+                for (const selector of loggedInElements) {
+                    if (document.querySelector(selector)) {
+                        console.log('Found logged-in element:', selector);
+                        foundLoggedInElement = true;
+                        break;
+                    }
+                }
+                
+                // Check if we're on a logged-in page (home, feed, profile)
+                const loggedInUrls = ['/feed', '/home', '/?', '/profile'];
+                const isOnLoggedInPage = loggedInUrls.some(url => 
+                    window.location.href.includes(url) || 
+                    window.location.pathname === '/'
+                );
+                
+                // Only return true if we have BOTH a logged-in element AND are not on login page
+                if (foundLoggedInElement && !isOnLoginPage) {
+                    console.log('✅ Successfully logged in - found UI elements and not on login page');
+                    return true;
+                }
+                
+                // Alternative: if we're clearly on a logged-in page with content
+                if (isOnLoggedInPage && foundLoggedInElement) {
+                    console.log('✅ Successfully logged in - on logged-in page with UI elements');
+                    return true;
+                }
+                
+                console.log('Still waiting for login completion...');
+                return false;
+            }""",
+            timeout=600000  # 10 minutes timeout
+        )
+
+    def _detect_reddit_login(self, page: Page):
+        """Detect Reddit login completion"""
+        page.wait_for_function(
+            """() => {
+                console.log('Checking Reddit login status...', window.location.href);
+                
+                // Check if we're still on login page
+                const isOnLoginPage = window.location.href.includes('/login') || 
+                                     window.location.href.includes('/signin') ||
+                                     window.location.href.includes('accounts.reddit.com');
+                
+                if (isOnLoginPage) {
+                    console.log('Still on login page');
+                    return false;
+                }
+                
+                // Check for Reddit-specific logged-in indicators
+                const loggedInElements = [
+                    '[data-testid="user-menu-button"]',
+                    '[data-testid="account-menu"]',
+                    'button[aria-label="User Menu"]',
+                    '[data-testid="header-account-button"]',
+                    '[data-click-id="profile"]',
+                    '[data-testid="user-menu"]',
+                    'svg[viewBox="0 0 20 20"][class*="icon"]',  // Reddit user icon
+                    'button[id*="USER_DROPDOWN"]'
+                ];
+                
+                let foundLoggedInElement = false;
+                for (const selector of loggedInElements) {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        console.log('Found Reddit logged-in element:', selector, element);
+                        foundLoggedInElement = true;
+                        break;
+                    }
+                }
+                
+                // Check for presence of user profile link or username
+                const userElements = document.querySelectorAll('a[href*="/user/"], a[href*="/u/"]');
+                if (userElements.length > 0) {
+                    console.log('Found user profile links');
+                    foundLoggedInElement = true;
+                }
+                
+                // Check if we're on Reddit main page and not login page
+                const isOnRedditMain = window.location.hostname.includes('reddit.com') && 
+                                      !isOnLoginPage &&
+                                      (window.location.pathname === '/' || 
+                                       window.location.pathname === '' ||
+                                       window.location.pathname.includes('/r/'));
+                
+                // Check for presence of "Create Post" button or similar
+                const createPost = document.querySelector('[data-testid="submit-page-button"]') ||
+                                  document.querySelector('a[href*="/submit"]') ||
+                                  document.querySelector('button[aria-label*="Create"]');
+                
+                if (createPost) {
+                    console.log('Found create post button');
+                    foundLoggedInElement = true;
+                }
+                
+                // Final verification: we're on reddit.com, not on login page, and have logged-in elements
+                if (isOnRedditMain && foundLoggedInElement) {
+                    console.log('✅ Successfully logged into Reddit');
+                    return true;
+                }
+                
+                // Also check if we have reddit session cookies
+                if (document.cookie.includes('reddit_session') || document.cookie.includes('session_tracker')) {
+                    console.log('✅ Found Reddit session cookies');
+                    return true;
+                }
+                
+                console.log('Still waiting for Reddit login completion...');
+                return false;
+            }""",
+            timeout=600000  # 10 minutes timeout
+        )
+
+    def _detect_instagram_login(self, page: Page):
+        """Detect Instagram login completion"""
+        page.wait_for_function(
+            """() => {
+                console.log('Checking Instagram login status...', window.location.href);
+                
+                // Check if we're still on login page
+                const isOnLoginPage = window.location.href.includes('/accounts/login') || 
+                                     window.location.href.includes('/login');
+                
+                if (isOnLoginPage) {
+                    console.log('Still on Instagram login page');
+                    return false;
+                }
+                
+                // Check for Instagram-specific logged-in indicators
+                const loggedInElements = [
+                    'svg[aria-label="Profile"]',
+                    'a[href*="/accounts/edit/"]',
+                    '[data-testid="user-avatar"]',
+                    'nav[role="navigation"]',
+                    'a[href="/explore/"]',
+                    'button[aria-label="Profile"]'
+                ];
+                
+                let foundLoggedInElement = false;
+                for (const selector of loggedInElements) {
+                    if (document.querySelector(selector)) {
+                        console.log('Found Instagram logged-in element:', selector);
+                        foundLoggedInElement = true;
+                        break;
+                    }
+                }
+                
+                // Check if we're on Instagram main feed
+                const isOnInstagramMain = window.location.hostname.includes('instagram.com') && 
+                                         !isOnLoginPage &&
+                                         (window.location.pathname === '/' || 
+                                          window.location.pathname === '');
+                
+                if (isOnInstagramMain && foundLoggedInElement) {
+                    console.log('✅ Successfully logged into Instagram');
+                    return true;
+                }
+                
+                console.log('Still waiting for Instagram login completion...');
+                return false;
+            }""",
+            timeout=600000  # 10 minutes timeout
+        )
+
+    def _detect_generic_login(self, page: Page, platform: str):
+        """Generic login detection for unknown platforms"""
+        page.wait_for_function(
+            f"""() => {{
+                console.log('Checking {platform} login status...', window.location.href);
+                
+                // Check if we're still on a login page
+                const isOnLoginPage = window.location.href.includes('/login') || 
+                                     window.location.href.includes('/signin') ||
+                                     window.location.href.includes('/auth');
+                
+                if (isOnLoginPage) {{
+                    console.log('Still on login page');
+                    return false;
+                }}
+                
+                // Generic indicators of being logged in
+                const loggedInElements = [
+                    '[data-testid*="user"]',
+                    '[data-testid*="profile"]',
+                    '[data-testid*="account"]',
+                    'button[aria-label*="User"]',
+                    'button[aria-label*="Profile"]',
+                    'button[aria-label*="Account"]',
+                    'a[href*="/profile"]',
+                    'a[href*="/account"]',
+                    'a[href*="/settings"]',
+                    'nav[role="navigation"]'
+                ];
+                
+                let foundLoggedInElement = false;
+                for (const selector of loggedInElements) {{
+                    if (document.querySelector(selector)) {{
+                        console.log('Found logged-in element:', selector);
+                        foundLoggedInElement = true;
+                        break;
+                    }}
+                }}
+                
+                if (foundLoggedInElement) {{
+                    console.log('✅ Successfully logged into {platform}');
+                    return true;
+                }}
+                
+                console.log('Still waiting for {platform} login completion...');
+                return false;
+            }}""",
+            timeout=600000  # 10 minutes timeout
+        )
 
     def _publish_videos(self, platform: str, task: str, target_name: str) -> Dict[str, Any]:
         """
