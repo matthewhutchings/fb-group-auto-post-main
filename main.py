@@ -17,7 +17,7 @@ def get_sources_list(platform: str):
 
 if __name__ == "__main__":
     rules_by_platform = load_rules()
-    runner = RulesRunner(rules_by_platform, headless=False, base_video_dir=Path("recordings"))
+    runner = RulesRunner(rules_by_platform, headless=False, base_video_dir=Path("workspace/recordings"))
 
     now = datetime.now()
     POST_CONTENT = f"""

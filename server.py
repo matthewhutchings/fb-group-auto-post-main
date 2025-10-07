@@ -18,7 +18,7 @@ from platforms.loader import load_rules
 API_KEY = os.environ.get("POSTER_API_KEY")           # simple header auth
 ALLOW_ORIGINS = os.environ.get("CORS_ALLOW_ORIGINS", "*")
 
-PUBLIC_DIR = Path("recordings_public")               # where videos are exposed
+PUBLIC_DIR = Path("workspace/recordings_public")               # where videos are exposed
 PUBLIC_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Multi Poster API", version="1.2.0")
