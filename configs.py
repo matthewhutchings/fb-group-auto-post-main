@@ -6,6 +6,14 @@ SOCIAL_MAPS = {
     'facebook': {
         'login_url': 'https://facebook.com/login',
         'filename': 'facebook.json'
+    },
+    'reddit': {
+        'login_url': 'https://www.reddit.com/login',
+        'filename': 'reddit.json'
+    },
+    'instagram': {
+        'login_url': 'https://www.instagram.com/accounts/login/',
+        'filename': 'instagram.json'
     }
 }
 

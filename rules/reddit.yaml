@@ -1,21 +1,26 @@
-platform: facebook
+platform: reddit
 tasks:
-  post_group:
+  post_subreddit:
     steps:
       - type: goto
-        url: "https://facebook.com/groups/{{target.username}}"
+        url: "https://www.reddit.com/r/{{target.username}}/submit"
+      - type: wait_selector
+        selector: "[data-testid='post-type-text']"
+      - type: click
+        selector: "[data-testid='post-type-text']"
+      - type: wait_selector
+        selector: "[data-testid='post-title-input']"
+      - type: fill
+        selector: "[data-testid='post-title-input']"
+        value: "Automated Post - {{target.name}}"
+      - type: wait_selector
+        selector: "[data-testid='post-text-input'] div[contenteditable='true']"
+      - type: fill
+        selector: "[data-testid='post-text-input'] div[contenteditable='true']"
+        value: "{{content}}"
       - type: sleep
         seconds: 2.0
       - type: click
-        selector: "//span[contains(text(), \"Write something\") or contains(text(), \"What's on your mind\")]"
-      - type: wait_selector
-        selector: "//div[@role='dialog']//div[@contenteditable='true']"
-      - type: fill
-        selector: "//div[@role='dialog']//div[@contenteditable='true']"
-        value: "{{content}}"
-      - type: sleep
-        seconds: 1.2
-      - type: click
-        selector: "//div[@role='dialog']//div[@aria-label='Post' or @aria-label='Share']"
+        selector: "[data-testid='post-submit-button']"
       - type: sleep
         seconds: 4.0

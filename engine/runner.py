@@ -38,10 +38,10 @@ class RulesRunner:
     ):
         self.rules_by_platform = rules_by_platform
         self.headless = headless
-        self.base_video_dir = Path("/workspace/recordings")
+        self.base_video_dir = base_video_dir or Path("recordings")
         self.base_video_dir.mkdir(parents=True, exist_ok=True)
 
-        self.public_dir = Path("/workspace/recordings_public")
+        self.public_dir = public_dir or Path("recordings_public")
 
         self.public_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,38 +84,93 @@ class RulesRunner:
         login_url = configs.SOCIAL_MAPS[platform]['login_url']
         filename = configs.SOCIAL_MAPS[platform].get('filename', f'{platform}.json')
         
-        self._log(f"[cookies] Navigating to {login_url} for {platform} login")
+        self._log(f"[cookies] Opening {platform} login page...")
+        self._log(f"[cookies] URL: {login_url}")
         page.goto(login_url)
         
-        self._log(f"[cookies] Browser opened for {platform} login. Waiting for user to complete login...")
+        # Wait for page to fully load
+        page.wait_for_load_state("networkidle")
+        
+        self._log(f"[cookies] ✅ Browser opened for {platform} login")
+        self._log(f"[cookies] Please log in manually in the browser window...")
+        self._log(f"[cookies] Waiting for login completion (up to 10 minutes)...")
         
         # Wait for navigation away from login page or presence of logged-in indicators
         try:
-            # Wait for navigation away from login page or specific success indicators
+            # More strict login detection - wait for actual login, not just page load
             page.wait_for_function(
                 """() => {
-                    // Check if we're no longer on login page
-                    if (!window.location.href.includes('/login')) {
+                    // Only return true if we have clear evidence of being logged in
+                    
+                    // First check: Are we still on the login page?
+                    const isOnLoginPage = window.location.href.includes('/login') || 
+                                         window.location.href.includes('/signin');
+                    
+                    if (isOnLoginPage) {
+                        // If still on login page, check if login form is gone AND we have logged-in elements
+                        const loginForm = document.querySelector('[data-testid="royal_login_form"]') ||
+                                        document.querySelector('form[action*="login"]') ||
+                                        document.querySelector('#loginform');
+                        
+                        // Only proceed if login form is completely gone
+                        if (loginForm) {
+                            console.log('Still on login page with form visible');
+                            return false;
+                        }
+                    }
+                    
+                    // Check for definitive logged-in indicators
+                    const loggedInElements = [
+                        '[aria-label="Account"]',
+                        '[data-testid="blue_bar"]',
+                        '[data-testid="fb-nav-bar"]',
+                        '[data-testid="nav-bar-user-menu"]',
+                        '[role="banner"] [role="navigation"]',
+                        '[data-testid="left_nav_menu_list"]',
+                        'div[data-pagelet="LeftRail"]'
+                    ];
+                    
+                    let foundLoggedInElement = false;
+                    for (const selector of loggedInElements) {
+                        if (document.querySelector(selector)) {
+                            console.log('Found logged-in element:', selector);
+                            foundLoggedInElement = true;
+                            break;
+                        }
+                    }
+                    
+                    // Check if we're on a logged-in page (home, feed, profile)
+                    const loggedInUrls = ['/feed', '/home', '/?', '/profile'];
+                    const isOnLoggedInPage = loggedInUrls.some(url => 
+                        window.location.href.includes(url) || 
+                        window.location.pathname === '/'
+                    );
+                    
+                    // Only return true if we have BOTH a logged-in element AND are not on login page
+                    if (foundLoggedInElement && !isOnLoginPage) {
+                        console.log('✅ Successfully logged in - found UI elements and not on login page');
                         return true;
                     }
-                    // Check for Facebook-specific logged-in indicators
-                    if (document.querySelector('[data-testid="royal_login_form"]') === null) {
+                    
+                    // Alternative: if we're clearly on a logged-in page with content
+                    if (isOnLoggedInPage && foundLoggedInElement) {
+                        console.log('✅ Successfully logged in - on logged-in page with UI elements');
                         return true;
                     }
-                    // Check for presence of user menu or other logged-in elements
-                    if (document.querySelector('[aria-label="Account"]') || 
-                        document.querySelector('[data-testid="blue_bar"]') ||
-                        document.querySelector('[role="navigation"]')) {
-                        return true;
-                    }
+                    
+                    console.log('Still waiting for login completion...');
                     return false;
                 }""",
                 timeout=600000  # 10 minutes timeout
             )
-            self._log(f"[cookies] Login detected for {platform}")
+            self._log(f"[cookies] ✅ Login detected for {platform}")
+            
+            # Wait a bit more to ensure all cookies are set
+            page.wait_for_timeout(3000)  # 3 seconds
+            
         except Exception as e:
-            self._log(f"[cookies] Login timeout or error: {e}")
-            raise
+            self._log(f"[cookies] ❌ Login timeout or error: {e}")
+            raise Exception(f"Login timeout for {platform}. Please try again.")
         
         # Save cookies
         sessions_dir = Path.cwd() / "sessions"
@@ -124,11 +179,17 @@ class RulesRunner:
         
         try:
             cookies = page.context.cookies()
+            if not cookies:
+                self._log(f"[cookies] ⚠️  No cookies found. Login may not have completed properly.")
+                raise Exception("No cookies found after login")
+            
             with open(cookie_file, 'w', encoding='utf-8') as f:
                 json.dump(cookies, f, indent=2)
-            self._log(f"[cookies] Saved {len(cookies)} cookies to {cookie_file}")
+            self._log(f"[cookies] ✅ Saved {len(cookies)} cookies to {cookie_file}")
+            self._log(f"[cookies] Cookie generation completed successfully!")
+            
         except Exception as e:
-            self._log(f"[cookies] Failed to save cookies: {e}")
+            self._log(f"[cookies] ❌ Failed to save cookies: {e}")
             raise
 
     def _publish_videos(self, platform: str, task: str, target_name: str) -> Dict[str, Any]:
