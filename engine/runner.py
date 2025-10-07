@@ -249,13 +249,27 @@ class RulesRunner:
         results: List[Dict[str, Any]] = []
 
         with sync_playwright() as p:
-            # Chrome channel helps reduce detection; fall back to Chromium
+            # Use local Chrome if configured and available
             try:
-                if self.use_chrome_channel:
-                    browser = p.chromium.launch(headless=self.headless, channel="chrome", args=["--start-maximized"])
+                if self.use_chrome_channel and configs.BROWSER_CONFIG['use_local_chrome']:
+                    browser = p.chromium.launch(
+                        headless=self.headless, 
+                        channel="chrome",
+                        executable_path=configs.BROWSER_CONFIG['chrome_path'],
+                        args=configs.BROWSER_CONFIG['chrome_args']
+                    )
+                elif self.use_chrome_channel:
+                    # Try Chrome channel without explicit path
+                    browser = p.chromium.launch(
+                        headless=self.headless, 
+                        channel="chrome",
+                        args=["--start-maximized"]
+                    )
                 else:
                     raise Exception("Chrome channel disabled")
-            except Exception:
+            except Exception as e:
+                print(f"[WARNING] Failed to launch Chrome: {e}")
+                print("[WARNING] Falling back to Chromium...")
                 browser = p.chromium.launch(headless=self.headless, args=["--start-maximized"])
 
             for item in plan:

@@ -109,13 +109,24 @@ def _background_cookie_generation(session_id: str, platform: str, manual_confirm
         
         with sync_playwright() as p:
             try:
-                # Try Chrome channel first, fall back to Chromium
-                browser = p.chromium.launch(
-                    headless=False,  # Must be False for manual login
-                    channel="chrome", 
-                    args=["--start-maximized"]
-                )
-            except Exception:
+                # Use local Chrome if configured and available
+                if configs.BROWSER_CONFIG['use_local_chrome']:
+                    browser = p.chromium.launch(
+                        headless=False,  # Must be False for manual login
+                        channel="chrome",
+                        executable_path=configs.BROWSER_CONFIG['chrome_path'],
+                        args=configs.BROWSER_CONFIG['chrome_args']
+                    )
+                else:
+                    # Try Chrome channel without explicit path
+                    browser = p.chromium.launch(
+                        headless=False,
+                        channel="chrome", 
+                        args=["--start-maximized"]
+                    )
+            except Exception as e:
+                print(f"[WARNING] Failed to launch Chrome: {e}")
+                print("[WARNING] Falling back to Chromium...")
                 browser = p.chromium.launch(
                     headless=False,
                     args=["--start-maximized"]
